@@ -7,13 +7,13 @@
        dan data hanya boleh dikirim ke Google Apps Script milikmu. -->
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src https://script.google.com https://script.googleusercontent.com; manifest-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
   <meta name="referrer" content="no-referrer">
-  <title>Brankas</title>
+  <title>Lkk Brankas</title>
   <meta name="description" content="Penyimpan email, password & catatan rahasia terenkripsi, tersimpan di Google Sheets-mu.">
   <meta name="theme-color" content="#ffffff">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
-  <meta name="apple-mobile-web-app-title" content="Brankas">
+  <meta name="apple-mobile-web-app-title" content="Lkk Brankas">
   <meta name="format-detection" content="telephone=no">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icons/favicon.svg" type="image/svg+xml">
@@ -22,6 +22,14 @@
   <script src="boot.js"></script>
 </head>
 <body>
+  <div id="splash" class="splash" aria-hidden="true">
+    <div class="sp-in">
+      <img class="sp-logo" src="icons/favicon.svg" alt="" width="88" height="88">
+      <div class="sp-name">Lkk Brankas</div>
+      <div class="sp-by">by R</div>
+    </div>
+    <div class="sp-ver" id="splash-ver"></div>
+  </div>
   <div id="app" class="app">
     <header class="topbar" id="topbar"></header>
     <main class="views" id="views">

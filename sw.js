@@ -1,7 +1,7 @@
 /* Brankas — Service Worker (sw.js)
    Menyimpan file aplikasi agar bisa dibuka offline. TIDAK menyimpan data brankas.
    Naikkan VERSION setiap kali kamu mengunggah perubahan file. */
-const VERSION = 'brankas-v1.0.0';
+const VERSION = 'brankas-v1.1.0';
 const SHELL = ['./', './index.html', './style.css', './boot.js', './app.js', './manifest.webmanifest',
   './icons/icon-192.png', './icons/icon-512.png', './icons/apple-touch-icon.png', './icons/favicon.svg'];
 

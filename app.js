@@ -13,7 +13,23 @@
    ================================================================== */
 'use strict';
 
-const APP_VERSION = '1.0.0';
+const APP_VERSION = '1.1.0';
+const APP_NAME = 'Lkk Brankas';
+const APP_BY = 'by R';
+const CHANGELOG = {
+  '1.1.0': [
+    'Kategori: Mail, Web, Subscription, Bank & Keuangan, Sosial Media, plus kategori buatan sendiri',
+    'Urutkan berdasarkan nama, tanggal ditambahkan, atau terakhir diperbarui',
+    'Badge "Diperbarui" untuk item yang pernah diedit',
+    'Splash screen baru dengan nomor versi'
+  ]
+};
+const CFG_ID = 'zcfg-categories';          // item khusus (terenkripsi) berisi daftar kategori buatan sendiri
+const BASE_CATS = [
+  { name: 'Mail', ic: 'mail' }, { name: 'Web', ic: 'globe' }, { name: 'Subscription', ic: 'repeat' },
+  { name: 'Bank & Keuangan', ic: 'bank' }, { name: 'Sosial Media', ic: 'users' }
+];
+const SORTS = { name: 'Nama A–Z', updated: 'Terakhir diperbarui', created: 'Terakhir ditambahkan' };
 const K = { cfg: 'bk.cfg', cache: 'bk.cache', prefs: 'bk.prefs', pin: 'bk.pin', device: 'bk.device' };
 const ITER = 600000;                       // putaran PBKDF2 untuk master password
 const PIN_ITER = 100000;                   // putaran PBKDF2 untuk PIN (+ pepper server)
@@ -65,7 +81,15 @@ const IC = {
   clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
   db: '<ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.7 4 3 9 3s9-1.3 9-3V5"/><path d="M3 12c0 1.7 4 3 9 3s9-1.3 9-3"/>',
   backspace: '<path d="M21 5H9l-6 7 6 7h12a1 1 0 0 0 1-1V6a1 1 0 0 0-1-1z"/><path d="m17 9-6 6M11 9l6 6"/>',
-  user: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>'
+  user: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
+  mail: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/>',
+  globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>',
+  repeat: '<path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14M7 22l-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/>',
+  bank: '<path d="M3 10 12 4l9 6M5 10v8M9 10v8M15 10v8M19 10v8M3 20h18"/>',
+  users: '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><path d="M16 4.5a3.5 3.5 0 0 1 0 7M18 14a6 6 0 0 1 3.5 6"/>',
+  tag: '<path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8z"/><circle cx="7.5" cy="7.5" r="1.5"/>',
+  sort: '<path d="M3 6h13M3 12h9M3 18h5M18 8v13M15 18l3 3 3-3"/>',
+  spark: '<path d="M12 3l1.9 5.6L19.5 10l-5.6 1.9L12 17.5l-1.9-5.6L4.5 10l5.6-1.4z"/>'
 };
 const icon = (n, s = 20) => `<svg class="ic" width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${IC[n] || ''}</svg>`;
 const starFill = s => `<svg class="ic" width="${s}" height="${s}" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">${IC.star}</svg>`;
@@ -125,9 +149,10 @@ const V = { raw: null, key: null };           // kunci brankas — HANYA di memo
 const S = {
   cfg: ls.get(K.cfg),
   meta: null, rows: [], items: [], broken: 0,
-  unlocked: false, view: 'vault', filter: 'all', q: '',
+  unlocked: false, view: 'vault', filter: 'all', type: 'all', q: '', customCats: [], cfgUpdated: '',
+  bootHadCfg: !!ls.get(K.cfg), updateReady: false,
   loading: false, lastSync: null, sheetName: '', syncError: null,
-  prefs: Object.assign({ theme: 'auto', lockAfter: 60, masterAt: 0, pinAsked: false }, ls.get(K.prefs, {})),
+  prefs: Object.assign({ theme: 'auto', lockAfter: 60, masterAt: 0, pinAsked: false, sort: 'name', seenVersion: '' }, ls.get(K.prefs, {})),
   hiddenAt: 0, lastAct: Date.now()
 };
 const savePrefs = () => ls.set(K.prefs, S.prefs);
@@ -177,7 +202,16 @@ function applyServer(data) {
 }
 async function decryptAll() {
   const items = []; let broken = 0;
+  S.customCats = []; S.cfgUpdated = '';
   for (const row of S.rows) {
+    if (row.id === CFG_ID) {
+      try {
+        const c = JSON.parse(dec.decode(await unseal(V.key, row.data, row.id)));
+        S.customCats = (Array.isArray(c.cats) ? c.cats : []).filter(x => typeof x === 'string' && x.trim()).slice(0, 50);
+        S.cfgUpdated = row.updated;
+      } catch (e) { broken++; }
+      continue;
+    }
     try { items.push({ ...JSON.parse(dec.decode(await unseal(V.key, row.data, row.id))), id: row.id, updated: row.updated }); }
     catch (e) { broken++; }
   }
@@ -202,7 +236,7 @@ async function refresh({ silent = false } = {}) {
 
 async function saveItem(item, existing) {
   const now = new Date().toISOString();
-  const body = { type: item.type, name: item.name, user: item.user, pass: item.pass, url: item.url, note: item.note, fav: !!item.fav, created: existing?.created || now, changed: now };
+  const body = { type: item.type, name: item.name, cat: item.cat || '', user: item.user, pass: item.pass, url: item.url, note: item.note, fav: !!item.fav, created: existing?.created || now, changed: now };
   const data = await seal(V.key, enc.encode(JSON.stringify(body)), item.id);
   const res = await api('put', { id: item.id, data, base: existing ? existing.updated : '' });
   const row = { id: item.id, data, updated: res.updated };
@@ -217,6 +251,63 @@ async function removeItem(it) {
   S.rows = S.rows.filter(r => r.id !== it.id); S.items = S.items.filter(x => x.id !== it.id);
   saveCache();
 }
+
+/* ---------------- Kategori ---------------- */
+const sameName = (a, b) => String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
+function allCats() {
+  const list = BASE_CATS.map(c => ({ ...c, base: true }));
+  S.customCats.forEach(n => { if (!list.some(c => sameName(c.name, n))) list.push({ name: n, ic: 'tag', custom: true }); });
+  S.items.forEach(i => { if (i.cat && !list.some(c => sameName(c.name, i.cat))) list.push({ name: i.cat, ic: 'tag', orphan: true }); });
+  return list;
+}
+const catOf = name => allCats().find(c => sameName(c.name, name));
+const catIcon = name => (catOf(name) || { ic: 'tag' }).ic;
+async function saveCats() {
+  const data = await seal(V.key, enc.encode(JSON.stringify({ type: 'cfg', cats: S.customCats })), CFG_ID);
+  const res = await api('put', { id: CFG_ID, data, base: S.cfgUpdated || '' });
+  S.cfgUpdated = res.updated;
+  const row = { id: CFG_ID, data, updated: res.updated };
+  const i = S.rows.findIndex(r => r.id === CFG_ID); if (i >= 0) S.rows[i] = row; else S.rows.push(row);
+  saveCache();
+}
+/** Dialog membuat kategori baru. done(nama) dipanggil setelah tersimpan. */
+function newCategory(done) {
+  openSheet({
+    title: 'Kategori baru',
+    html: `<div class="field"><label>Nama kategori</label><input class="input" id="nc-name" maxlength="24" placeholder="Contoh: Kantor, Game, Belanja" autocomplete="off" enterkeyhint="done"></div>
+      <div class="field-err" id="nc-err" style="text-align:left"></div>`,
+    foot: `<button class="btn primary block lg" id="nc-save">Tambah kategori</button>`,
+    onMount: s => {
+      const inp = $('#nc-name', s.el), err = $('#nc-err', s.el), btn = $('#nc-save', s.el);
+      setTimeout(() => inp.focus(), 60);
+      inp.addEventListener('keydown', e => { if (e.key === 'Enter') btn.click(); });
+      btn.addEventListener('click', async () => {
+        const name = inp.value.trim().replace(/\s+/g, ' ');
+        err.textContent = '';
+        if (!name) { err.textContent = 'Nama kategori wajib diisi.'; return; }
+        if (allCats().some(c => sameName(c.name, name))) { err.textContent = 'Kategori ini sudah ada.'; return; }
+        busy(btn, 'Menyimpan…');
+        S.customCats.push(name);
+        try { await saveCats(); await s.close(); toast('success', `Kategori "${name}" ditambahkan`); done && done(name); render(); }
+        catch (e) { S.customCats.pop(); unbusy(btn); err.textContent = e.offline ? 'Butuh internet untuk menyimpan kategori.' : e.message; if (e.code === 'CONFLICT') refresh({ silent: true }); }
+      });
+    }
+  });
+}
+async function removeCategory(name) {
+  const used = S.items.filter(i => sameName(i.cat, name)).length;
+  if (used) return toast('warn', `Masih dipakai ${used} item. Ganti kategorinya dulu.`, 3500);
+  if (!await confirmDialog({ title: `Hapus kategori "${name}"?`, message: 'Kategori dihapus dari daftar. Tidak ada item yang terhapus.', ok: 'Hapus', ic: 'tag' })) return;
+  const before = S.customCats.slice();
+  S.customCats = S.customCats.filter(n => !sameName(n, name));
+  try { await saveCats(); toast('success', 'Kategori dihapus'); if (sameName(S.filter, name)) S.filter = 'all'; render(); }
+  catch (e) { S.customCats = before; toast('error', e.offline ? 'Butuh internet.' : e.message); }
+}
+
+/* ---------------- Tanggal & badge ---------------- */
+const tsOf = (it, k) => Date.parse(k === 'created' ? it.created : (it.changed || it.created || it.updated)) || 0;
+const isEdited = it => !!(it.created && it.changed && Date.parse(it.changed) - Date.parse(it.created) > 1000);
+const shortDate = iso => { try { return new Date(iso).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }); } catch (e) { return ''; } };
 
 /* ==================================================================
    PIN PER-PERANGKAT
@@ -257,6 +348,19 @@ async function openVault(raw) {
   S.view = 'vault';
   render();
   refresh({ silent: true });
+  const prev = S.prefs.seenVersion;
+  S.prefs.seenVersion = APP_VERSION; savePrefs();
+  if (prev !== APP_VERSION && (prev || S.bootHadCfg)) setTimeout(() => showWhatsNew(true), 600);
+}
+function showWhatsNew(updated) {
+  const notes = CHANGELOG[APP_VERSION] || [];
+  openSheet({
+    cls: 'dialog',
+    html: `<div class="dialog-body"><div class="art" style="background:var(--surface);color:var(--text)">${icon('spark', 22)}</div>
+      <h3>${updated ? 'Diperbarui ke' : 'Versi'} v${APP_VERSION}</h3>
+      <ul class="whatsnew">${notes.map(n => `<li>${esc(n)}</li>`).join('')}</ul></div>
+      <div class="dialog-actions" style="grid-template-columns:1fr"><button class="btn primary" data-close>Oke</button></div>`
+  });
 }
 
 function lock() {
@@ -281,7 +385,7 @@ function gate(html) {
   closeGate();
   const el = document.createElement('div');
   el.className = 'gate';
-  el.innerHTML = `<div class="gate-in">${html}</div>`;
+  el.innerHTML = `<div class="gate-in">${html}<div class="brand-foot">${APP_NAME} ${APP_BY} · v${APP_VERSION}</div></div>`;
   document.body.appendChild(el);
   return el;
 }
@@ -640,24 +744,40 @@ function navigate(view) { if (S.view === view) { window.scrollTo({ top: 0, behav
 /* ---------- Daftar brankas ---------- */
 function renderVault() {
   const el = $('[data-view="vault"]');
-  const n = { all: S.items.length, login: S.items.filter(i => i.type === 'login').length, note: S.items.filter(i => i.type === 'note').length };
-  el.innerHTML = `<div class="search">${icon('search', 18)}<input class="input" id="q" type="search" placeholder="Cari nama, email, atau link…" value="${esc(S.q)}" autocomplete="off" autocapitalize="off" spellcheck="false"></div>
-    <div class="chips">${[['all', 'Semua'], ['login', 'Login'], ['note', 'Catatan']].map(([k, l]) => `<button class="chip ${S.filter === k ? 'active' : ''}" data-filter="${k}">${l}<span class="count">${n[k]}</span></button>`).join('')}</div>
+  const pool = S.items.filter(i => S.type === 'all' || i.type === S.type);
+  const count = name => pool.filter(i => sameName(i.cat, name)).length;
+  const none = pool.filter(i => !i.cat).length;
+  const tuned = S.prefs.sort !== 'name' || S.type !== 'all';
+  el.innerHTML = `<div class="search-row"><div class="search">${icon('search', 18)}<input class="input" id="q" type="search" placeholder="Cari nama, email, atau link…" value="${esc(S.q)}" autocomplete="off" autocapitalize="off" spellcheck="false"></div>
+      <button class="filter-btn ${tuned ? 'active' : ''}" data-action="sort" aria-label="Urutkan & filter">${icon('sort', 19)}</button></div>
+    <div class="chips">
+      <button class="chip ${S.filter === 'all' ? 'active' : ''}" data-filter="all">Semua<span class="count">${pool.length}</span></button>
+      ${allCats().map(c => { const n = count(c.name); return `<button class="chip ${sameName(S.filter, c.name) ? 'active' : ''} ${n ? '' : 'zero'}" data-filter="${esc(c.name)}">${icon(c.ic, 15)}${esc(c.name)}<span class="count">${n}</span></button>`; }).join('')}
+      ${none ? `<button class="chip ${S.filter === '__none' ? 'active' : ''}" data-filter="__none">Tanpa kategori<span class="count">${none}</span></button>` : ''}
+      <button class="chip add-chip" data-action="new-cat">${icon('plus', 15)}Kategori</button>
+    </div>
+    ${tuned ? `<div class="tune-note">${icon('sort', 14)}${esc(SORTS[S.prefs.sort])}${S.type !== 'all' ? ' · ' + (S.type === 'note' ? 'Catatan rahasia' : 'Login') : ''}<button class="link" data-action="reset-sort">Reset</button></div>` : ''}
     ${S.broken ? `<div class="banner" style="margin-top:12px">${icon('alert', 18)}<span><b>${S.broken} item tidak bisa dibuka.</b> Kemungkinan data di sheet diubah manual.</span></div>` : ''}
     <div id="list"></div>`;
   renderList();
 }
 function filtered() {
   const q = S.q.trim().toLowerCase();
-  return S.items.filter(i => (S.filter === 'all' || i.type === S.filter) &&
-    (!q || [i.name, i.user, i.url, i.note].some(v => String(v || '').toLowerCase().includes(q))));
+  const list = S.items.filter(i => (S.type === 'all' || i.type === S.type) &&
+    (S.filter === 'all' || (S.filter === '__none' ? !i.cat : sameName(i.cat, S.filter))) &&
+    (!q || [i.name, i.user, i.url, i.note, i.cat].some(v => String(v || '').toLowerCase().includes(q))));
+  const k = S.prefs.sort;
+  if (k !== 'name') list.sort((a, b) => tsOf(b, k) - tsOf(a, k));
+  return list;
 }
 function itemRow(it, i) {
   const note = it.type === 'note';
-  const sub = note ? 'Catatan rahasia' : (it.user || hostOf(it.url) || 'Tanpa username');
+  let sub = note ? 'Catatan rahasia' : (it.user || hostOf(it.url) || 'Tanpa username');
+  if (S.prefs.sort !== 'name') sub = `${S.prefs.sort === 'created' ? 'Ditambahkan' : 'Diperbarui'} ${shortDate(S.prefs.sort === 'created' ? it.created : (it.changed || it.created))} · ${sub}`;
+  else if (it.cat && S.filter === 'all') sub = `${it.cat} · ${sub}`;
   return `<div class="item" data-item="${esc(it.id)}" role="button" tabindex="0" style="animation-delay:${Math.min(i, 12) * 16}ms">
     <span class="avatar ${note ? 'note' : ''}" style="background:${colorOf(it.name)}">${note ? icon('note', 20) : esc(initialOf(it.name))}</span>
-    <span class="main"><b><span>${esc(it.name)}</span>${it.fav ? `<span class="star">${starFill(13)}</span>` : ''}</b><small>${esc(sub)}</small></span>
+    <span class="main"><b><span>${esc(it.name)}</span>${it.fav ? `<span class="star">${starFill(13)}</span>` : ''}${isEdited(it) ? '<span class="upd-badge">Diperbarui</span>' : ''}</b><small>${esc(sub)}</small></span>
     ${!note && it.pass ? `<button class="quick" data-copy-pass="${esc(it.id)}" aria-label="Salin password">${icon('copy', 19)}</button>` : `<span class="quick" style="color:var(--muted)">${icon('chevron', 18)}</span>`}
   </div>`;
 }
@@ -670,12 +790,36 @@ function renderList() {
     return;
   }
   const list = filtered();
-  if (!list.length) { box.innerHTML = `<div class="empty"><div class="art">${icon('search', 34)}</div><h4>Tidak ditemukan</h4><p>Coba kata kunci lain.</p></div>`; return; }
+  if (!list.length) {
+    const inCat = !S.q.trim() && S.filter !== 'all';
+    box.innerHTML = inCat ? `<div class="empty"><div class="art">${icon(S.filter === '__none' ? 'tag' : catIcon(S.filter), 34)}</div><h4>Belum ada item di ${esc(S.filter === '__none' ? 'sini' : S.filter)}</h4><p>Tambahkan item dan pilih kategori ini.</p><button class="btn primary" data-action="add">${icon('plus', 18)}Tambah item</button></div>`
+      : `<div class="empty"><div class="art">${icon('search', 34)}</div><h4>Tidak ditemukan</h4><p>Coba kata kunci atau filter lain.</p></div>`;
+    return;
+  }
   const favs = list.filter(i => i.fav);
-  const showFav = favs.length && !S.q.trim();
+  const showFav = favs.length && !S.q.trim() && S.filter === 'all' && S.prefs.sort === 'name';
+  const title = S.q.trim() ? list.length + ' hasil' : S.filter === 'all' ? 'Semua item' : S.filter === '__none' ? 'Tanpa kategori' : S.filter;
   box.innerHTML = (showFav ? `<div class="section-head"><h2>Favorit</h2></div><div class="tx-list">${favs.map(itemRow).join('')}</div>` : '') +
-    `<div class="section-head"><h2>${S.q.trim() ? list.length + ' hasil' : (S.filter === 'note' ? 'Catatan' : S.filter === 'login' ? 'Login' : 'Semua item')}</h2></div>
+    `<div class="section-head"><h2>${esc(title)}</h2><span class="muted" style="font-size:12.5px">${esc(SORTS[S.prefs.sort])}</span></div>
      <div class="tx-list">${list.map(itemRow).join('')}</div>`;
+}
+
+/* ---------- Urutkan & filter jenis ---------- */
+function openSort() {
+  openSheet({
+    title: 'Urutkan & filter',
+    html: `<div class="f-label">Urutkan</div>
+      <div class="opt-list">${Object.entries(SORTS).map(([k, l]) => `<button class="opt ${S.prefs.sort === k ? 'active' : ''}" data-sort="${k}"><span>${l}</span>${icon('check', 18)}</button>`).join('')}</div>
+      <div class="f-label" style="margin-top:18px">Jenis</div>
+      <div class="seg">${[['all', 'Semua'], ['login', 'Login'], ['note', 'Catatan']].map(([k, l]) => `<button class="${S.type === k ? 'active' : ''}" data-type-f="${k}">${l}</button>`).join('')}</div>`,
+    onMount: s => s.el.addEventListener('click', async e => {
+      const so = e.target.closest('[data-sort]'), ty = e.target.closest('[data-type-f]');
+      if (so) { S.prefs.sort = so.dataset.sort; savePrefs(); }
+      else if (ty) { S.type = ty.dataset.typeF; }
+      else return;
+      render(); await s.close();
+    })
+  });
 }
 
 /* ---------- Pengaturan ---------- */
@@ -706,10 +850,22 @@ function renderSettings() {
       <button class="row btn-row" data-action="connect">${icon('link')}<div class="grow"><b>Ganti URL / kunci akses</b></div>${icon('chevron', 18)}</button>
       <button class="row btn-row danger" data-action="disconnect">${icon('logout')}<div class="grow"><b>Putuskan HP ini</b><small>Data di spreadsheet tidak terhapus</small></div></button>
     </div>
+    <div class="lg-title">Kategori</div>
+    <div class="list-group">
+      ${allCats().map(c => `<div class="row">${icon(c.ic)}<div class="grow"><b>${esc(c.name)}</b><small>${S.items.filter(i => sameName(i.cat, c.name)).length} item${c.base ? ' · bawaan' : c.orphan ? ' · dari item lama' : ''}</small></div>
+        ${c.custom ? `<button class="act-x" data-del-cat="${esc(c.name)}" aria-label="Hapus kategori">${icon('trash', 18)}</button>` : ''}</div>`).join('')}
+      <button class="row btn-row" data-action="new-cat">${icon('plus')}<div class="grow"><b>Tambah kategori</b><small>Tersimpan terenkripsi & tersinkron ke semua perangkat</small></div>${icon('chevron', 18)}</button>
+    </div>
     <div class="lg-title">Tampilan</div>
     <div class="list-group"><div class="row">${icon('sun')}<div class="grow"><b>Tema</b></div>
       <div class="seg sm">${[['auto', 'Otomatis'], ['light', 'Terang'], ['dark', 'Gelap']].map(([k, l]) => `<button class="${S.prefs.theme === k ? 'active' : ''}" data-theme-set="${k}">${l}</button>`).join('')}</div></div></div>
-    <p class="muted" style="text-align:center;font-size:12px;margin:20px 0">Brankas v${APP_VERSION}</p>`;
+    <div class="lg-title">Tentang</div>
+    <div class="list-group">
+      <div class="row"><img src="icons/favicon.svg" alt="" width="36" height="36" style="border-radius:10px"><div class="grow"><b>${APP_NAME} ${APP_BY}</b><small>Versi ${APP_VERSION}</small></div></div>
+      <button class="row btn-row" data-action="whatsnew">${icon('spark')}<div class="grow"><b>Yang baru di v${APP_VERSION}</b></div>${icon('chevron', 18)}</button>
+    </div>
+    ${S.updateReady ? `<div class="banner" style="margin-top:4px">${icon('spark', 18)}<span><b>Versi baru siap.</b> Kunci lalu buka ulang aplikasi.</span></div>` : ''}
+    <p class="muted" style="text-align:center;font-size:12px;margin:20px 0">${APP_NAME} ${APP_BY} · v${APP_VERSION}</p>`;
 }
 
 /* ---------- Detail item ---------- */
@@ -727,7 +883,8 @@ function openDetail(id) {
         <div style="min-width:0"><h4>${esc(it.name)} ${it.fav ? `<span class="star" style="color:#f59e0b">${starFill(15)}</span>` : ''}</h4><small>${note ? 'Catatan rahasia' : esc(hostOf(it.url) || 'Akun login')}</small></div></div>
       <div class="fields">${note ? field('note', 'Isi catatan', it.note, { pre: true }) :
         field('user', 'Email / username', it.user) + field('pass', 'Password', it.pass, { secret: true }) + field('url', 'Link', it.url, { link: true }) + field('note', 'Catatan', it.note, { pre: true, copyable: false })}</div>
-      <div class="d-meta">Diperbarui ${esc(fmtDT(it.changed || it.updated))}</div>`,
+      ${it.cat ? `<div class="d-cat">${icon(catIcon(it.cat), 15)}${esc(it.cat)}</div>` : ''}
+      <div class="d-meta">Ditambahkan ${esc(fmtDT(it.created || it.updated))}${isEdited(it) ? `<br>Diperbarui ${esc(fmtDT(it.changed))} <span class="upd-badge">Diperbarui</span>` : ''}</div>`,
     foot: `<div class="actions-2"><button class="btn secondary" data-del>${icon('trash', 18)}Hapus</button><button class="btn primary" data-edit>${icon('edit', 18)}Edit</button></div>`,
     onMount: s => {
       const labels = { user: 'Email/username', pass: 'Password', url: 'Link', note: note ? 'Catatan' : 'Catatan' };
@@ -755,7 +912,7 @@ function openDetail(id) {
 /* ---------- Tambah / edit ---------- */
 function openForm(existing) {
   const isNew = !existing;
-  const f = existing ? { ...existing } : { id: genId(), type: S.filter === 'note' ? 'note' : 'login', name: '', user: '', pass: '', url: '', note: '', fav: false };
+  const f = existing ? { ...existing, cat: existing.cat || '' } : { id: genId(), type: S.type === 'note' ? 'note' : 'login', name: '', cat: (S.filter !== 'all' && S.filter !== '__none') ? S.filter : '', user: '', pass: '', url: '', note: '', fav: false };
   openSheet({
     title: isNew ? 'Tambah item' : 'Edit item',
     html: `${isNew ? `<div class="seg" id="f-type" style="margin-bottom:16px">${[['login', 'Login'], ['note', 'Catatan rahasia']].map(([k, l]) => `<button data-type="${k}">${l}</button>`).join('')}</div>` : ''}
@@ -777,13 +934,19 @@ function openForm(existing) {
           <div class="field"><label>Judul</label><input class="input" data-f="name" maxlength="80" placeholder="Contoh: PIN ATM, Kode pemulihan" autocomplete="off" value="${esc(f.name)}"></div>
           <div class="field"><label>Isi catatan</label><textarea class="input" data-f="note" maxlength="5000" placeholder="Tulis catatan rahasiamu…" style="min-height:180px">${esc(f.note)}</textarea></div>`;
         $('#f-body', root).insertAdjacentHTML('beforeend', `<button class="chip fav-toggle ${f.fav ? 'active' : ''}" id="f-fav">${f.fav ? starFill(16) : icon('star', 16)}Favorit</button>`);
+        $('[data-f="name"]', root).closest('.field').insertAdjacentHTML('afterend', `<div class="field"><label>Kategori <span class="muted">(opsional)</span></label>
+          <div class="chips wrap" id="f-cats">${allCats().map(c => `<button class="chip ${sameName(f.cat, c.name) ? 'active' : ''}" data-cat="${esc(c.name)}">${icon(c.ic, 15)}${esc(c.name)}</button>`).join('')}
+          <button class="chip add-chip" data-newcat>${icon('plus', 15)}Baru</button></div></div>`);
       };
       paint();
       bindEyes(root);
       root.addEventListener('click', e => {
         const t = e.target.closest('[data-type]');
         if (t && t.dataset.type !== f.type) { collect(); f.type = t.dataset.type; paint(); return; }
-        if (e.target.closest('#f-fav')) { collect(); f.fav = !f.fav; paint(); }
+        if (e.target.closest('#f-fav')) { collect(); f.fav = !f.fav; paint(); return; }
+        const c = e.target.closest('[data-cat]');
+        if (c) { collect(); f.cat = sameName(f.cat, c.dataset.cat) ? '' : c.dataset.cat; paint(); return; }
+        if (e.target.closest('[data-newcat]')) { collect(); newCategory(name => { f.cat = name; paint(); }); }
       });
       if (isNew) setTimeout(() => $('[data-f="name"]', root)?.focus(), 60);
       $('#f-save', root).addEventListener('click', async () => {
@@ -795,6 +958,9 @@ function openForm(existing) {
         else if (f.type === 'note' && !f.note.trim()) err.textContent = 'Isi catatan wajib diisi.';
         if (err.textContent) { shake(err); return; }
         if (f.type === 'note') { f.user = ''; f.pass = ''; f.url = ''; }
+        if (existing && ['type', 'name', 'cat', 'user', 'pass', 'url', 'note'].every(k => String(f[k] || '') === String(existing[k] || '')) && !!f.fav === !!existing.fav) {
+          await s.close(); toast('success', 'Tidak ada perubahan'); return;
+        }
         const btn = $('#f-save', root); busy(btn, 'Mengenkripsi & menyimpan…');
         try {
           await saveItem(f, existing);
@@ -864,6 +1030,8 @@ document.addEventListener('click', async e => {
   if (!S.unlocked || e.target.closest('.sheet-wrap,.gate,.lock')) return;
   const cp = e.target.closest('[data-copy-pass]');
   if (cp) { const it = S.items.find(x => x.id === cp.dataset.copyPass); return it && copy(it.pass, 'Password ' + it.name); }
+  const dc = e.target.closest('[data-del-cat]');
+  if (dc) return removeCategory(dc.dataset.delCat);
   const el = e.target.closest('[data-nav],[data-action],[data-item],[data-filter],[data-theme-set],[data-lock-after]');
   if (!el) return;
   const d = el.dataset;
@@ -874,6 +1042,10 @@ document.addEventListener('click', async e => {
   if (d.lockAfter !== undefined) { S.prefs.lockAfter = Number(d.lockAfter); savePrefs(); return renderSettings(); }
   switch (d.action) {
     case 'add': return openForm();
+    case 'sort': return openSort();
+    case 'reset-sort': S.prefs.sort = 'name'; S.type = 'all'; savePrefs(); return render();
+    case 'new-cat': return newCategory(name => { S.filter = name; render(); });
+    case 'whatsnew': return showWhatsNew(false);
     case 'refresh': return refresh();
     case 'lock': return lock();
     case 'pin-on': case 'pin-change': return setupPin();
@@ -917,13 +1089,30 @@ window.addEventListener('pagehide', () => { if (S.unlocked && S.prefs.lockAfter 
 /* ==================================================================
    MULAI
    ================================================================== */
+const BOOT_AT = performance.now();
+function hideSplash() {
+  const sp = $('#splash'); if (!sp) return;
+  setTimeout(() => { sp.classList.add('out'); setTimeout(() => sp.remove(), 420); }, Math.max(0, 900 - (performance.now() - BOOT_AT)));
+}
 function init() {
+  const ver = $('#splash-ver'); if (ver) ver.textContent = 'v' + APP_VERSION;
+  hideSplash();
   $$('[data-icon]').forEach(el => { el.outerHTML = icon(el.dataset.icon, el.dataset.icon === 'plus' ? 26 : 22); });
   applyTheme();
   if (!window.crypto?.subtle) { gate(`<h1>Browser tidak didukung</h1><p class="lead">Buka Brankas lewat HTTPS di Chrome atau Safari versi terbaru.</p>`); return; }
   if (!S.cfg) return gateConnect();
   loadCache();
   gateUnlock();
-  if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => { });
+  if ('serviceWorker' in navigator && location.protocol === 'https:') {
+    const hadController = !!navigator.serviceWorker.controller;
+    navigator.serviceWorker.register('sw.js').catch(() => { });
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (!hadController) return;                 // pemasangan pertama, bukan pembaruan
+      if (!S.unlocked) return location.reload();  // aman memuat ulang saat terkunci
+      S.updateReady = true;
+      toast('success', 'Versi baru siap. Kunci lalu buka ulang aplikasi untuk memakainya.', 5000);
+      if (S.view === 'settings') renderSettings();
+    });
+  }
 }
 init();
